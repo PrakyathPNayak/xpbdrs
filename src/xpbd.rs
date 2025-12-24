@@ -2,10 +2,11 @@
 
 use std::ops::IndexMut;
 
+use bitvec::vec::BitVec;
 use raylib::math::Vector3;
 
 use crate::{
-    constraint::{Constraint, ValueGrad, apply_constraint},
+    constraint::{Constraint, apply_constraint},
     mesh::{Tetrahedral, Vertex, VertexId},
 };
 
@@ -13,6 +14,8 @@ use crate::{
 pub struct XpbdState {
     /// Velocities of each particle.
     velocities: Vec<Vector3>,
+    /// Boolean vector indicating inactive constraints by index.
+    inactive_constraints: BitVec,
 }
 
 /// Immutable parameters for the XPBD simulation.
@@ -26,6 +29,10 @@ pub struct XpbdParams {
     n_substeps: usize,
     /// Time step for each simulation substep.
     time_substep: f32,
+    /// Length constraint force-threshold for deactivation.
+    l_threshold_length: f32,
+    /// Volume constraint force-threshold for deactivation.
+    l_threshold_volume: f32,
 }
 
 impl XpbdParams {
@@ -35,21 +42,26 @@ impl XpbdParams {
         time_step: f32,
         stiffness_length: f32,
         stiffness_volume: f32,
+        l_threshold_length: f32,
+        l_threshold_volume: f32,
     ) -> Self {
         Self {
             stiffness_length,
             stiffness_volume,
             n_substeps,
             time_substep: time_step / n_substeps as f32,
+            l_threshold_length,
+            l_threshold_volume,
         }
     }
 }
 
 impl XpbdState {
     /// Initialize the XPBD state with given number of vertices, substeps, and time step.
-    pub fn new(n_vertices: usize) -> Self {
+    pub fn new(n_vertices: usize, n_constraints: usize) -> Self {
         Self {
             velocities: vec![Vector3::zero(); n_vertices],
+            inactive_constraints: BitVec::repeat(false, n_constraints),
         }
     }
 }
@@ -69,6 +81,33 @@ pub fn evaluate_tet_constraints(mesh: &Tetrahedral) -> TetConstraintValues {
     TetConstraintValues { lengths, volumes }
 }
 
+/// Helper function to process constraints and deactivate them if necessary.
+fn process_constraints<'a, V, I, C, const N: usize>(
+    base_index: usize,
+    iter: I,
+    vertices: &mut V,
+    inactive_constraints: &mut BitVec,
+    l_threshold: f32,
+    alpha: f32,
+) -> usize
+where
+    I: Iterator<Item = (&'a C, f32)>,
+    C: Constraint<N> + 'a,
+    V: IndexMut<VertexId, Output = Vertex>,
+{
+    let mut constraint_index = base_index;
+    for (constraint, ref_value) in iter {
+        if !inactive_constraints[constraint_index] {
+            let result = constraint.value_and_grad(vertices);
+            if apply_constraint(result, ref_value, alpha, vertices) > l_threshold {
+                inactive_constraints.set(constraint_index, true);
+            }
+        }
+        constraint_index += 1;
+    }
+    constraint_index
+}
+
 // TODO: Implement more generic Xpbd function.
 pub fn step_basic(
     params: &XpbdParams,
@@ -76,12 +115,17 @@ pub fn step_basic(
     mesh: &mut Tetrahedral,
     initial_value: &TetConstraintValues,
 ) -> XpbdState {
-    let XpbdState { mut velocities } = state;
+    let XpbdState {
+        mut velocities,
+        mut inactive_constraints,
+    } = state;
     let XpbdParams {
         stiffness_volume,
         stiffness_length,
         n_substeps,
         time_substep,
+        l_threshold_length,
+        l_threshold_volume,
     } = params.clone();
     for _ in 0..n_substeps {
         // copy old positions each time.
@@ -96,26 +140,34 @@ pub fn step_basic(
             }
         }
 
-        for (edge, &ref_length) in mesh.edges.iter().zip(initial_value.lengths.iter()) {
-            let result = edge.value_and_grad(&mesh.vertices);
-            let alpha = stiffness_length / (time_substep * time_substep);
-            apply_constraint(result, ref_length, alpha, &mut mesh.vertices);
-        }
+        let mut constraint_index = 0;
+        constraint_index += process_constraints(
+            constraint_index,
+            mesh.edges.iter().zip(initial_value.lengths.iter().copied()),
+            &mut mesh.vertices,
+            &mut inactive_constraints,
+            l_threshold_length,
+            stiffness_length / (time_substep * time_substep),
+        );
 
-        for (i, tetrahedron) in mesh.tetrahedra.iter().enumerate() {
-            let ref_volume = *initial_value
-                .volumes
-                .get(i)
-                .expect("Tetrahedron should have an initial volume.");
-            let result = tetrahedron.value_and_grad(&mesh.vertices);
-            let alpha = stiffness_volume / (time_substep * time_substep);
-            apply_constraint(result, ref_volume, alpha, &mut mesh.vertices);
-        }
+        process_constraints(
+            constraint_index,
+            mesh.tetrahedra
+                .iter()
+                .zip(initial_value.volumes.iter().copied()),
+            &mut mesh.vertices,
+            &mut inactive_constraints,
+            l_threshold_volume,
+            stiffness_volume / (time_substep * time_substep),
+        );
 
         // Update velocities based on position changes
         for (i, vertex) in mesh.vertices.iter().enumerate() {
             velocities[i] = (vertex.position - old_positions[i].position) / time_substep;
         }
     }
-    XpbdState { velocities }
+    XpbdState {
+        velocities,
+        inactive_constraints,
+    }
 }

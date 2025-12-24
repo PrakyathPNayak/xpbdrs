@@ -4,6 +4,8 @@ mod constraint;
 mod mesh;
 mod xpbd;
 
+use ::core::f32;
+
 use clap::{Parser, Subcommand};
 use raylib::prelude::*;
 use tracing::{debug, error, info, instrument};
@@ -160,9 +162,17 @@ fn run_simulation(mesh_path: Option<&str>) {
     rl.set_target_fps(TARGET_FPS.into());
 
     let initial_values = mesh.as_ref().map(xpbd::evaluate_tet_constraints);
-    let xpbd_params =
-        xpbd::XpbdParams::new(N_SUBSTEPS, TIME_STEP, EDGE_STIFFNESS, VOLUME_STIFFNESS);
-    let mut state = mesh.as_ref().map(|m| XpbdState::new(m.vertices.len()));
+    let xpbd_params = xpbd::XpbdParams::new(
+        N_SUBSTEPS,
+        TIME_STEP,
+        EDGE_STIFFNESS,
+        VOLUME_STIFFNESS,
+        f32::INFINITY, // no threshold for now
+        f32::INFINITY, // no threshold for now
+    );
+    let mut state = mesh
+        .as_ref()
+        .map(|m| XpbdState::new(m.vertices.len(), m.edges.len() + m.tetrahedra.len()));
 
     while !rl.window_should_close() {
         handle_input(&rl, &mut show_wireframe, &mut show_faces);

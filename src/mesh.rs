@@ -199,8 +199,8 @@ impl Tetrahedral {
                     "Mesh loaded successfully"
                 );
             }
-            Err(_) => {
-                error!(mesh_path, "Failed to load mesh");
+            Err(e) => {
+                error!(mesh_path, error = %e, "Failed to load mesh");
             }
         }
 
