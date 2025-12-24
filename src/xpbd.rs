@@ -5,7 +5,7 @@ use std::ops::IndexMut;
 use raylib::math::Vector3;
 
 use crate::{
-    constraint::{Constraint, ValueGrad},
+    constraint::{Constraint, ValueGrad, apply_constraint_uniform},
     mesh::{Tetrahedral, Vertex, VertexId},
 };
 
@@ -69,24 +69,7 @@ pub fn evaluate_tet_constraints(mesh: &Tetrahedral) -> TetConstraintValues {
     TetConstraintValues { lengths, volumes }
 }
 
-/// Apply a constraint correction with uniform inverse mass to all participants.
-fn apply_constraint_uniform<const N: usize, V>(
-    vag: ValueGrad<N>,
-    reference_value: f32,
-    alpha: f32,
-    vertices: &mut V,
-) where
-    V: IndexMut<VertexId, Output = Vertex>,
-{
-    let lambda = (reference_value - vag.value)
-        / (alpha + vag.grad.into_iter().map(|g| g.dot(g)).sum::<f32>());
-    for (i, vertex_id) in vag.participants.into_iter().enumerate() {
-        let grad = vag.grad[i];
-        let vertex = &mut vertices[vertex_id];
-        vertex.position += grad * lambda;
-    }
-}
-
+// TODO: Implement more generic Xpbd function.
 pub fn step_basic(
     params: &XpbdParams,
     state: XpbdState,
@@ -113,11 +96,7 @@ pub fn step_basic(
             }
         }
 
-        for (i, edge) in mesh.edges.iter().enumerate() {
-            let ref_length = *initial_value
-                .lengths
-                .get(i)
-                .expect("Edge should have an initial length.");
+        for (edge, &ref_length) in mesh.edges.iter().zip(initial_value.lengths.iter()) {
             let result = edge.value_and_grad(&mesh.vertices);
             let alpha = stiffness_length / (time_substep * time_substep);
             apply_constraint_uniform(result, ref_length, alpha, &mut mesh.vertices);

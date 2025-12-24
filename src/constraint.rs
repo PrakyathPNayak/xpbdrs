@@ -1,6 +1,6 @@
 //! General constraints for physics simulation.
 
-use std::ops::Index;
+use std::ops::{Index, IndexMut};
 
 use crate::mesh::{Edge, Tetrahedron, Vertex, VertexId};
 use raylib::math::Vector3;
@@ -27,6 +27,24 @@ pub trait Constraint<const ARITY: usize> {
     fn value_and_grad<V>(&self, vertices: &V) -> ValueGrad<ARITY>
     where
         V: Index<VertexId, Output = Vertex>;
+}
+
+/// Apply a constraint correction with uniform inverse mass to all participants.
+pub fn apply_constraint_uniform<const N: usize, V>(
+    vag: ValueGrad<N>,
+    reference_value: f32,
+    alpha: f32,
+    vertices: &mut V,
+) where
+    V: IndexMut<VertexId, Output = Vertex>,
+{
+    let lambda = (reference_value - vag.value)
+        / (alpha + vag.grad.into_iter().map(|g| g.dot(g)).sum::<f32>());
+    for (i, vertex_id) in vag.participants.into_iter().enumerate() {
+        let grad = vag.grad[i];
+        let vertex = &mut vertices[vertex_id];
+        vertex.position += grad * lambda;
+    }
 }
 
 /// Binary edge constraint.
