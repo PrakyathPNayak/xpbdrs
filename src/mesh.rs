@@ -6,6 +6,8 @@ use std::io::{BufRead, BufReader};
 use std::ops::{Index, IndexMut};
 use std::path::Path;
 
+use crate::constraint::TetConstraints;
+
 fn default_inv_mass() -> f32 {
     1.0
 }
@@ -37,8 +39,7 @@ pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Tetrahedral {
     pub vertices: Vec<Vertex>,
-    pub edges: Vec<Edge>,
-    pub tetrahedra: Vec<Tetrahedron>,
+    pub constraints: TetConstraints,
     pub faces: Vec<Triangle>,
 }
 
@@ -134,8 +135,7 @@ impl Tetrahedral {
 
         Ok(Self {
             vertices,
-            edges,
-            tetrahedra,
+            constraints: TetConstraints { edges, tetrahedra },
             faces,
         })
     }
@@ -193,9 +193,9 @@ impl Tetrahedral {
             Ok(m) => {
                 info!(
                     vertices = m.vertices.len(),
-                    edges = m.edges.len(),
+                    edges = m.constraints.edges.len(),
                     faces = m.faces.len(),
-                    tetrahedra = m.tetrahedra.len(),
+                    tetrahedra = m.constraints.tetrahedra.len(),
                     "Mesh loaded successfully"
                 );
             }
@@ -210,7 +210,7 @@ impl Tetrahedral {
     /// Draw wireframe of the mesh
     pub fn draw_wireframe(&self, d3: &mut RaylibMode3D<RaylibDrawHandle>, color: Color) {
         // Draw explicit edges if available
-        for edge in &self.edges {
+        for edge in &self.constraints.edges {
             if let (Some(v1), Some(v2)) = (
                 self.vertices.get((edge.0.0 - 1) as usize),
                 self.vertices.get((edge.1.0 - 1) as usize),
@@ -306,9 +306,9 @@ mod tests {
 
         let mesh = Tetrahedral::from_files(prefix).unwrap();
         assert_eq!(mesh.vertices.len(), 2);
-        assert_eq!(mesh.edges.len(), 1);
+        assert_eq!(mesh.constraints.edges.len(), 1);
         assert_eq!(mesh.faces.len(), 1);
-        assert_eq!(mesh.tetrahedra.len(), 1);
+        assert_eq!(mesh.constraints.tetrahedra.len(), 1);
 
         // Cleanup
         for ext in &["node", "edge", "face", "ele"] {

@@ -10,7 +10,7 @@ use clap::{Parser, Subcommand};
 use raylib::prelude::*;
 use tracing::{debug, error, info, instrument};
 
-use crate::xpbd::XpbdState;
+use crate::xpbd::{ConstraintSet, XpbdState};
 
 #[derive(Parser)]
 #[command(name = "xpbdcloth")]
@@ -47,9 +47,9 @@ fn export_mesh(input_prefix: &str, output_path: &str) -> Result<(), Box<dyn std:
 
     info!(
         vertices = mesh.vertices.len(),
-        edges = mesh.edges.len(),
+        edges = mesh.constraints.edges.len(),
         faces = mesh.faces.len(),
-        tetrahedra = mesh.tetrahedra.len(),
+        tetrahedra = mesh.constraints.tetrahedra.len(),
         "Mesh loaded successfully"
     );
 
@@ -161,7 +161,7 @@ fn run_simulation(mesh_path: Option<&str>) {
     let mut camera = Camera3D::perspective(camera_pos, target, Vector3::new(0.0, 1.0, 0.0), 60.0);
     rl.set_target_fps(TARGET_FPS.into());
 
-    let initial_values = mesh.as_ref().map(xpbd::evaluate_tet_constraints);
+    let initial_values = mesh.as_ref().map(|m| m.constraints.evaluate(&m.vertices));
     let xpbd_params = xpbd::XpbdParams {
         n_substeps: N_SUBSTEPS,
         time_substep: TIME_STEP / (N_SUBSTEPS as f32),
@@ -169,9 +169,12 @@ fn run_simulation(mesh_path: Option<&str>) {
         stiffness_volume: VOLUME_STIFFNESS,
         ..Default::default()
     };
-    let mut state = mesh
-        .as_ref()
-        .map(|m| XpbdState::new(m.vertices.len(), m.edges.len() + m.tetrahedra.len()));
+    let mut state = mesh.as_ref().map(|m| {
+        XpbdState::new(
+            m.vertices.len(),
+            m.constraints.edges.len() + m.constraints.tetrahedra.len(),
+        )
+    });
 
     while !rl.window_should_close() {
         handle_input(&rl, &mut show_wireframe, &mut show_faces);
