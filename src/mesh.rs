@@ -7,6 +7,7 @@ use std::ops::{Index, IndexMut};
 use std::path::Path;
 
 use crate::constraint::TetConstraints;
+use crate::xpbd::XpbdState;
 
 fn default_inv_mass() -> f32 {
     1.0
@@ -33,13 +34,26 @@ pub struct Tetrahedron {
     pub indices: [VertexId; 4],
 }
 
+/// Unique identifier for a tetrahedron.
+#[derive(Clone, Debug, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct TetrahedronId(pub u32);
+
 /// An edge connecting two vertices.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Edge(pub VertexId, pub VertexId);
 
-/// A triangular face defined by three vertex indices.
-#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
-pub struct Triangle([VertexId; 3]);
+/// Unique identifier for an edge.
+#[derive(Clone, Debug, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct EdgeId(pub u32);
+
+/// A triangular face defined by three vertex indices and their edges.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct Triangle {
+    /// Three vertex indices forming the triangle.
+    pub verts: [VertexId; 3],
+    /// Three edge indices connecting the vertices (None if no constraint exists).
+    pub edges: [Option<EdgeId>; 3],
+}
 
 /// Result type for mesh operations.
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -103,7 +117,24 @@ impl Tetrahedral {
     /// # Errors
     /// Returns an error if files cannot be read or parsed.
     pub fn from_files(prefix: &str) -> Result<Self> {
-        let vertices = Self::parse_file(&format!("{prefix}.node"), |tokens| {
+        // TODO: Clean up dedup and hashmap logic using generics.
+        //  Preferably, Tetrahedron and Edge should manually implement Hash and Eq traits emphasizing unordered equality.
+        //  Then any generic dedup + map can work.
+        let vertices = Self::load_vertices(prefix)?;
+        let edges = Self::load_and_dedup_edges(prefix)?;
+        let face_triangles = Self::load_face_vertices(prefix)?;
+        let (edges, faces) = Self::build_faces_with_edges(edges, face_triangles);
+        let tetrahedra = Self::load_and_dedup_tetrahedra(prefix)?;
+
+        Ok(Self {
+            vertices,
+            constraints: TetConstraints { edges, tetrahedra },
+            faces,
+        })
+    }
+
+    fn load_vertices(prefix: &str) -> Result<Vec<Vertex>> {
+        Self::parse_file(&format!("{prefix}.node"), |tokens| {
             let coords: Vec<f32> = tokens[1..4]
                 .iter()
                 .map(|&t| t.parse().map_err(Into::into))
@@ -112,7 +143,12 @@ impl Tetrahedral {
                 position: Vector3::new(coords[0], coords[1], coords[2]),
                 inv_mass: 1.0,
             })
-        })?;
+        })
+    }
+
+    fn load_and_dedup_edges(prefix: &str) -> Result<Vec<Edge>> {
+        use std::collections::HashSet;
+        use tracing::warn;
 
         let edges = if Path::new(&format!("{prefix}.edge")).exists() {
             Self::parse_file(&format!("{prefix}.edge"), |tokens| {
@@ -123,18 +159,97 @@ impl Tetrahedral {
             Vec::new()
         };
 
-        let faces = if Path::new(&format!("{prefix}.face")).exists() {
+        // Dedup edges
+        let mut edge_set = HashSet::new();
+        let mut dedup_edges = Vec::new();
+        for edge in edges {
+            // Normalize edge to ensure consistent ordering
+            let normalized = if edge.0.0 <= edge.1.0 {
+                (edge.0, edge.1)
+            } else {
+                (edge.1, edge.0)
+            };
+
+            if edge_set.insert(normalized) {
+                dedup_edges.push(Edge(normalized.0, normalized.1));
+            } else {
+                warn!(
+                    "Duplicate edge constraint found: {:?} - {:?}",
+                    normalized.0, normalized.1
+                );
+            }
+        }
+
+        Ok(dedup_edges)
+    }
+
+    fn load_face_vertices(prefix: &str) -> Result<Vec<[VertexId; 3]>> {
+        if Path::new(&format!("{prefix}.face")).exists() {
             Self::parse_file(&format!("{prefix}.face"), |tokens| {
                 let ids = Self::parse_indices(tokens, 1, 3)?;
-                Ok(Triangle([
-                    VertexId(ids[0]),
-                    VertexId(ids[1]),
-                    VertexId(ids[2]),
-                ]))
-            })?
+                Ok([VertexId(ids[0]), VertexId(ids[1]), VertexId(ids[2])])
+            })
         } else {
-            Vec::new()
+            Ok(Vec::new())
+        }
+    }
+
+    fn build_faces_with_edges(
+        edges: Vec<Edge>,
+        face_triangles: Vec<[VertexId; 3]>,
+    ) -> (Vec<Edge>, Vec<Triangle>) {
+        use std::collections::HashMap;
+
+        let edge_map: HashMap<Edge, EdgeId> = edges
+            .iter()
+            .enumerate()
+            .map(|(i, edge)| {
+                (
+                    edge.clone(),
+                    EdgeId(
+                        i.try_into()
+                            .expect("Edge count should not be more than u32::MAX+1"),
+                    ),
+                )
+            })
+            .collect();
+
+        let faces = face_triangles
+            .into_iter()
+            .map(|verts| {
+                let edge_ids = [
+                    Self::find_existing_edge_id(&edge_map, verts[0], verts[1]),
+                    Self::find_existing_edge_id(&edge_map, verts[1], verts[2]),
+                    Self::find_existing_edge_id(&edge_map, verts[2], verts[0]),
+                ];
+
+                Triangle {
+                    verts,
+                    edges: edge_ids,
+                }
+            })
+            .collect();
+
+        (edges, faces)
+    }
+
+    fn find_existing_edge_id(
+        edge_map: &std::collections::HashMap<Edge, EdgeId>,
+        v1: VertexId,
+        v2: VertexId,
+    ) -> Option<EdgeId> {
+        let normalized_edge = if v1.0 <= v2.0 {
+            Edge(v1, v2)
+        } else {
+            Edge(v2, v1)
         };
+        // TODO: Maybe consider inferring missing edges?
+        edge_map.get(&normalized_edge).copied()
+    }
+
+    fn load_and_dedup_tetrahedra(prefix: &str) -> Result<Vec<Tetrahedron>> {
+        use std::collections::HashSet;
+        use tracing::warn;
 
         let tetrahedra = if Path::new(&format!("{prefix}.ele")).exists() {
             Self::parse_file(&format!("{prefix}.ele"), |tokens| {
@@ -152,11 +267,28 @@ impl Tetrahedral {
             Vec::new()
         };
 
-        Ok(Self {
-            vertices,
-            constraints: TetConstraints { edges, tetrahedra },
-            faces,
-        })
+        // Dedup tetrahedra
+        let mut tetra_set = HashSet::new();
+        let dedup_tetrahedra = tetrahedra
+            .into_iter()
+            .filter(|tetra| {
+                // Sort indices for consistent comparison
+                let mut sorted_indices = tetra.indices;
+                sorted_indices.sort_by_key(|id| id.0);
+
+                if tetra_set.insert(sorted_indices) {
+                    true
+                } else {
+                    warn!(
+                        "Duplicate tetrahedron constraint found: {:?}",
+                        sorted_indices
+                    );
+                    false
+                }
+            })
+            .collect();
+
+        Ok(dedup_tetrahedra)
     }
 
     /// Load tetrahedral mesh from bincode file.
@@ -273,18 +405,33 @@ impl Tetrahedral {
     }
 
     /// Draw filled faces
-    pub fn draw_faces(&self, d3: &mut RaylibMode3D<RaylibDrawHandle>, color: Color) {
+    pub fn draw_faces(
+        &self,
+        d3: &mut RaylibMode3D<RaylibDrawHandle>,
+        state: &XpbdState,
+        color: Color,
+    ) {
         for face in &self.faces {
             let verts = [
-                self.vertices.get((face.0[0].0 - 1) as usize),
-                self.vertices.get((face.0[1].0 - 1) as usize),
-                self.vertices.get((face.0[2].0 - 1) as usize),
+                self.vertices[(face.verts[0].0 - 1) as usize],
+                self.vertices[(face.verts[1].0 - 1) as usize],
+                self.vertices[(face.verts[2].0 - 1) as usize],
             ];
-            if let [Some(v1), Some(v2), Some(v3)] = verts {
-                let p1 = v1.position;
-                let p2 = v2.position;
-                let p3 = v3.position;
-                d3.draw_triangle3D(p1, p2, p3, color);
+
+            // A triangle is "torn" if any of its corresponding edge constraints are inactive.
+            let torn = face
+                .edges
+                .iter()
+                .filter_map(|e| e.as_ref()) // Only check edges that have constraints
+                .any(|e| state.constraint_inactive(e.0 as usize)); // in this constaint set, edges are solved first, so base index is 0.
+
+            if !torn {
+                d3.draw_triangle3D(
+                    verts[0].position,
+                    verts[1].position,
+                    verts[2].position,
+                    color,
+                );
             }
         }
     }

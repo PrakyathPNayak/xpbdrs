@@ -27,8 +27,8 @@ enum Commands {
         #[arg(short, long)]
         output: String,
     },
-    /// Run the cloth simulation
-    Simulate {
+    /// Run the simulation with a demo mesh.
+    Demo {
         /// Optional mesh file prefix to visualize
         mesh: Option<String>,
     },
@@ -108,11 +108,12 @@ fn handle_input(rl: &RaylibHandle, show_wireframe: &mut bool, show_faces: &mut b
 fn draw_mesh(
     d3: &mut RaylibMode3D<RaylibDrawHandle>,
     mesh: &mesh::Tetrahedral,
+    state: &XpbdState,
     show_wireframe: bool,
     show_faces: bool,
 ) {
     if show_faces {
-        mesh.draw_faces(d3, Color::LIGHTGRAY.alpha(0.7));
+        mesh.draw_faces(d3, state, Color::LIGHTGRAY.alpha(0.7));
     }
     if show_wireframe {
         mesh.draw_wireframe(d3, Color::BLUE);
@@ -202,7 +203,13 @@ fn run_simulation(mesh_path: Option<&str>) {
 
             // Draw mesh if loaded
             if let Some(mesh) = &mesh {
-                draw_mesh(&mut d3, mesh, show_wireframe, show_faces);
+                draw_mesh(
+                    &mut d3,
+                    mesh,
+                    state.as_ref().unwrap(),
+                    show_wireframe,
+                    show_faces,
+                );
             }
         }
 
@@ -228,7 +235,7 @@ fn main() {
                 std::process::exit(1);
             }
         }
-        Commands::Simulate { mesh } => {
+        Commands::Demo { mesh } => {
             run_simulation(mesh.as_deref());
         }
     }
