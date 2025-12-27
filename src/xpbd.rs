@@ -16,15 +16,33 @@ pub struct XpbdState {
     velocities: Vec<Vector3>,
     /// Boolean vector indicating inactive constraints by index.
     inactive_constraints: BitVec,
+    /// Vector to store old positions during substeps.
+    position_buffer: Vec<Vector3>,
+}
+
+impl XpbdState {
+    #[must_use]
+    /// Check if a constraint at given index is inactive.
+    /// Note that constraints are indexed in the order they are processed during constraint solving (see [`ConstraintProcessor`]).
+    /// So, index-0 corresponds to the first constraint processed, index-1 to the second, and so on.
+    /// If the index is out of bounds, the constraint is considered active (i.e., returns false).
+    pub fn constraint_inactive(&self, index: usize) -> bool {
+        self.inactive_constraints
+            .as_bitslice()
+            .get(index)
+            .is_some_and(|b| *b)
+    }
 }
 
 /// Immutable parameters for the XPBD simulation.
 #[derive(Clone, Debug)]
 pub struct XpbdParams {
-    /// Stiffness for edge length constraints.
-    pub stiffness_volume: f32,
-    /// Stiffness for tetrahedral volume constraints.
-    pub stiffness_length: f32,
+    /// A parameter that is inversely proportional to stiffness for volume constraints.
+    /// In particular, a value of 0.0 corresponds to infinite stiffness.
+    pub volume_compliance: f32,
+    /// A parameter that is inversely proportional to stiffness for edge length constraints.
+    /// In particular, a value of 0.0 corresponds to infinite stiffness.
+    pub length_compliance: f32,
     /// Number of substeps per simulation step.
     pub n_substeps: usize,
     /// Time step for each simulation substep.
@@ -33,29 +51,29 @@ pub struct XpbdParams {
     pub l_threshold_length: f32,
     /// Volume constraint force-threshold for deactivation.
     pub l_threshold_volume: f32,
-    /// A constant acceleration applied to all vertices (e.g., gravity).
-    pub constant_field: Vector3,
 }
 
 impl Default for XpbdParams {
     fn default() -> Self {
         Self {
-            stiffness_length: 0.0,
-            stiffness_volume: 0.0,
+            length_compliance: 0.0,
+            volume_compliance: 0.0,
             n_substeps: 10,
             time_substep: 0.016 / 10.0,
             l_threshold_length: f32::INFINITY,
             l_threshold_volume: f32::INFINITY,
-            constant_field: Vector3::new(0.0, -0.981, 0.0),
+            // constant_field: Vector3::new(0.0, -0.981, 0.0),
         }
     }
 }
 
 impl XpbdState {
     /// Initialize the XPBD state with given number of vertices, substeps, and time step.
+    #[must_use]
     pub fn new(n_vertices: usize, n_constraints: usize) -> Self {
         Self {
             velocities: vec![Vector3::zero(); n_vertices],
+            position_buffer: vec![Vector3::zero(); n_vertices],
             inactive_constraints: BitVec::repeat(false, n_constraints),
         }
     }
@@ -72,6 +90,7 @@ impl<V: IndexMut<VertexId, Output = Vertex>> ConstraintProcessor<'_, V> {
     /// Process constraints from an iterator, applying them to the vertices and deactivating those that exceed the threshold.
     /// Internally, the index of each constraint in the iterator is used to track constraint active status.
     /// Thus, it is imperative that `process` is called each time with constraints in the same order.
+    #[must_use]
     pub fn process<'a, I, C, const N: usize>(
         mut self,
         iter: I,
@@ -101,77 +120,83 @@ impl<V: IndexMut<VertexId, Output = Vertex>> ConstraintProcessor<'_, V> {
     }
 }
 
-// TODO: Implement more generic Xpbd function.
 /// Basic XPBD step function for tetrahedral meshes.
 /// Additionally accepts a vertex correction function to handle collisions and other vertex corrections that need to be applied after the kinematic update.
 pub fn step_basic<F>(
     params: &XpbdParams,
-    state: XpbdState,
+    mut state: XpbdState,
     mesh: &mut Tetrahedral,
     initial_value: &TetConstraintValues,
-    vertex_correction: F,
+    mut vertex_correction: F,
 ) -> XpbdState
 where
     F: FnMut(&mut Vertex),
 {
-    // TODO: Call `step` with appropriate arguments.
-    step(
-        params,
-        state,
-        &mut mesh.vertices,
-        &mesh.constraints,
-        initial_value,
-        vertex_correction,
-    )
+    let acceleration_due_to_gravity = |_: &Vertex| Vector3::new(0.0, -9.81, 0.0);
+    for _ in 0..params.n_substeps {
+        substep(
+            params,
+            &mut state,
+            &mut mesh.vertices,
+            &mesh.constraints,
+            initial_value,
+            &mut vertex_correction,
+            &acceleration_due_to_gravity,
+        );
+    }
+    state
 }
 
+/// Trait for constraint set over vertices collected in `V`, evaluating to constraint errors of type `I`.
 pub trait ConstraintSet<V: IndexMut<VertexId, Output = Vertex>, I> {
+    /// Evaluate the constraint set on given vertices.
     fn evaluate(&self, on: &V) -> I;
+    /// Solve the constraint set using the given processor.
     fn solve(&self, processor: ConstraintProcessor<V>, params: &XpbdParams, reference: &I);
 }
 
-pub fn step<'v, I, F, C>(
-    // generic over V
+/// Perform a single substep of XPBD simulation.
+/// This includes kinematic updates, constraint solving, and velocity updates.
+/// The `acceleration_field` closure allows for flexible force application (e.g., gravity, wind, etc.) on each vertex.
+/// The `post_kinematic_correction` closure allows for custom vertex corrections after the kinematic update (e.g., collision handling).
+pub fn substep<V, I, F, C, A>(
     params: &XpbdParams,
-    mut state: XpbdState,
-    vertices: &mut Vec<Vertex>,
+    state: &mut XpbdState,
+    vertices: &mut V,
     constraint_set: &C,
     initial_value: &I,
-    mut post_kinematic_correction: F,
-) -> XpbdState
-where
-    C: ConstraintSet<Vec<Vertex>, I>, // TODO: change constraint set to generic V
-    // V: IndexMut<VertexId, Output = Vertex>, // TODO: Add appropriate trait bounds
+    post_kinematic_correction: &mut F,
+    acceleration_field: &A,
+) where
+    C: ConstraintSet<V, I>,
+    V: IndexMut<VertexId, Output = Vertex>,
+    for<'a> &'a mut V: IntoIterator<Item = &'a mut Vertex>,
     F: FnMut(&mut Vertex),
+    A: Fn(&Vertex) -> Vector3,
 {
-    for _ in 0..params.n_substeps {
-        // copy old positions each time.
-        let mut old_positions: Vec<Vector3> = vec![Vector3::zero(); state.velocities.len()];
+    let old_positions = &mut state.position_buffer; // use buffer for old positions.
 
-        for (i, vertex) in vertices.into_iter().enumerate() {
-            // save old position
-            old_positions[i] = vertex.position;
+    for (i, vertex) in vertices.into_iter().enumerate() {
+        // save old position
+        old_positions[i] = vertex.position;
 
-            // unit mass for now
-            vertex.position += params.constant_field * params.time_substep * params.time_substep
-                + vertex.position * params.time_substep;
+        state.velocities[i] += acceleration_field(vertex) * params.time_substep;
+        vertex.position += state.velocities[i] * params.time_substep;
 
-            post_kinematic_correction(vertex);
-        }
-
-        let processor = ConstraintProcessor {
-            inactive_constraints: &mut state.inactive_constraints,
-            vertices,
-            constraint_index: 0,
-        };
-        constraint_set.solve(processor, params, initial_value);
-
-        // Update velocities based on position changes
-        for (i, vertex) in vertices.into_iter().enumerate() {
-            let new_velocity = (vertex.position - old_positions[i]) / params.time_substep;
-            // Update velocity in state
-            state.velocities[i] = new_velocity;
-        }
+        post_kinematic_correction(vertex);
     }
-    state
+
+    let processor = ConstraintProcessor {
+        inactive_constraints: &mut state.inactive_constraints,
+        vertices,
+        constraint_index: 0,
+    };
+    constraint_set.solve(processor, params, initial_value);
+
+    // Update velocities based on position changes
+    for (i, vertex) in vertices.into_iter().enumerate() {
+        let new_velocity = (vertex.position - old_positions[i]) / params.time_substep;
+        // Update velocity in state
+        state.velocities[i] = new_velocity;
+    }
 }

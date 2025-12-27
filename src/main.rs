@@ -1,16 +1,11 @@
-#![warn(clippy::pedantic)]
-
-mod constraint;
-mod mesh;
-mod xpbd;
-
-use ::core::f32;
-
 use clap::{Parser, Subcommand};
 use raylib::prelude::*;
 use tracing::{debug, error, info, instrument};
 
-use crate::xpbd::{ConstraintSet, XpbdState};
+use xpbdrs::{
+    mesh,
+    xpbd::{self, ConstraintSet, XpbdState},
+};
 
 #[derive(Parser)]
 #[command(name = "xpbdcloth")]
@@ -143,8 +138,8 @@ fn load_mesh(mesh_path: &str) -> Option<mesh::Tetrahedral> {
 const TARGET_FPS: u16 = 60;
 const TIME_STEP: f32 = 1.0 / TARGET_FPS as f32;
 const N_SUBSTEPS: usize = 10;
-const EDGE_STIFFNESS: f32 = 0.00;
-const VOLUME_STIFFNESS: f32 = 0.00;
+const EDGE_COMPLIANCE: f32 = 0.00;
+const VOLUME_COMPLIANCE: f32 = 0.00;
 
 #[instrument]
 fn run_simulation(mesh_path: Option<&str>) {
@@ -165,8 +160,8 @@ fn run_simulation(mesh_path: Option<&str>) {
     let xpbd_params = xpbd::XpbdParams {
         n_substeps: N_SUBSTEPS,
         time_substep: TIME_STEP / (N_SUBSTEPS as f32),
-        stiffness_length: EDGE_STIFFNESS,
-        stiffness_volume: VOLUME_STIFFNESS,
+        length_compliance: EDGE_COMPLIANCE,
+        volume_compliance: VOLUME_COMPLIANCE,
         ..Default::default()
     };
     let mut state = mesh.as_ref().map(|m| {

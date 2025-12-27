@@ -12,39 +12,54 @@ fn default_inv_mass() -> f32 {
     1.0
 }
 
+/// A vertex in 3D space with position and inverse mass.
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Vertex {
+    /// 3D position of the vertex.
     pub position: Vector3,
+    /// Inverse mass (1/mass) of the vertex.
     #[serde(default = "default_inv_mass")]
     pub inv_mass: f32,
 }
 
+/// Unique identifier for a vertex.
 #[derive(Clone, Debug, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct VertexId(pub u32);
 
+/// A tetrahedron defined by four vertex indices.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Tetrahedron {
+    /// Four vertex indices forming the tetrahedron.
     pub indices: [VertexId; 4],
 }
 
+/// An edge connecting two vertices.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Edge(pub VertexId, pub VertexId);
 
+/// A triangular face defined by three vertex indices.
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Triangle([VertexId; 3]);
 
+/// Result type for mesh operations.
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 /// Struct to contain data of a delanuay tetrahedralized mesh.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Tetrahedral {
+    /// Vertices of the tetrahedral mesh.
     pub vertices: Vec<Vertex>,
+    /// Constraints for physics simulation.
     pub constraints: TetConstraints,
+    /// Triangular faces of the mesh.
     pub faces: Vec<Triangle>,
 }
 
 impl Tetrahedral {
-    /// Parse a generic tetgen file format
+    /// Parse a generic tetgen file format.
+    ///
+    /// # Errors
+    /// Returns an error if the file cannot be read or parsed.
     fn parse_file<T>(filename: &str, processor: impl Fn(&[&str]) -> Result<T>) -> Result<Vec<T>> {
         let file = File::open(filename)?;
 
@@ -83,6 +98,10 @@ impl Tetrahedral {
         }
     }
 
+    /// Load tetrahedral mesh from tetgen files.
+    ///
+    /// # Errors
+    /// Returns an error if files cannot be read or parsed.
     pub fn from_files(prefix: &str) -> Result<Self> {
         let vertices = Self::parse_file(&format!("{prefix}.node"), |tokens| {
             let coords: Vec<f32> = tokens[1..4]
@@ -140,14 +159,20 @@ impl Tetrahedral {
         })
     }
 
-    /// Load tetrahedral mesh from bincode file
+    /// Load tetrahedral mesh from bincode file.
+    ///
+    /// # Errors
+    /// Returns an error if the file cannot be read or deserialized.
     pub fn from_bincode(filename: &str) -> Result<Self> {
         let data = std::fs::read(filename)?;
         let mesh: Self = bincode::deserialize(&data)?;
         Ok(mesh)
     }
 
-    /// Export mesh to bincode format
+    /// Export mesh to bincode format.
+    ///
+    /// # Errors
+    /// Returns an error if serialization fails or file cannot be written.
     pub fn export_to_bincode(&self, output_path: &str) -> Result<()> {
         use std::io::Write;
         use tracing::{debug, info};
@@ -172,7 +197,10 @@ impl Tetrahedral {
         Ok(())
     }
 
-    /// Load mesh with automatic format detection
+    /// Load mesh with automatic format detection.
+    ///
+    /// # Errors
+    /// Returns an error if the file format is unsupported or loading fails.
     pub fn load_mesh(mesh_path: &str) -> Result<Self> {
         use tracing::{debug, error, info};
 
@@ -223,6 +251,7 @@ impl Tetrahedral {
     }
 
     /// Get bounding box of the mesh
+    #[must_use]
     pub fn bounding_box(&self) -> (Vector3, Vector3) {
         if self.vertices.is_empty() {
             return (Vector3::zero(), Vector3::zero());

@@ -32,7 +32,7 @@ pub trait Constraint<const ARITY: usize> {
         V: Index<VertexId, Output = Vertex>;
 }
 
-/// Apply constraint correction to all participants.
+/// Apply constraint correction to all participants in vertices `V` with time-scaled compliance `alpha`, given the reference value.
 /// Returns the computed Lagrange multiplier.
 pub fn apply_constraint<const N: usize, V>(
     vag: ValueGrad<N>,
@@ -146,15 +146,20 @@ impl Constraint<4> for Tetrahedron {
     }
 }
 
+/// Values computed from tetrahedral constraints.
 pub struct TetConstraintValues {
+    /// Edge lengths for distance constraints.
     pub lengths: Vec<f32>,
+    /// Tetrahedron volumes for volume constraints.
     pub volumes: Vec<f32>,
 }
 
 /// Struct to contain constraint data for tetrahedral meshes.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct TetConstraints {
+    /// Edge constraints for distance preservation.
     pub edges: Vec<Edge>,
+    /// Tetrahedral constraints for volume preservation.
     pub tetrahedra: Vec<Tetrahedron>,
 }
 
@@ -171,18 +176,18 @@ impl ConstraintSet<Vec<Vertex>, TetConstraintValues> for TetConstraints {
         params: &crate::xpbd::XpbdParams,
         reference: &TetConstraintValues,
     ) {
-        processor
+        let _ = processor
             .process(
                 self.edges.iter().zip(reference.lengths.iter().copied()),
                 params.l_threshold_length,
-                params.stiffness_length / (params.time_substep * params.time_substep),
+                params.length_compliance / (params.time_substep * params.time_substep),
             )
             .process(
                 self.tetrahedra
                     .iter()
                     .zip(reference.volumes.iter().copied()),
                 params.l_threshold_volume,
-                params.stiffness_volume / (params.time_substep * params.time_substep),
+                params.volume_compliance / (params.time_substep * params.time_substep),
             );
     }
 }
