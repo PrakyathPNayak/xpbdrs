@@ -3,7 +3,7 @@ use raylib::prelude::*;
 use tracing::{debug, error, info, instrument};
 
 use xpbdrs::{
-    mesh,
+    mesh::{self, Mesh},
     xpbd::{self, ConstraintSet, XpbdState},
 };
 

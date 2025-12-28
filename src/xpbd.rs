@@ -6,8 +6,8 @@ use bitvec::vec::BitVec;
 use raylib::math::Vector3;
 
 use crate::{
-    constraint::{Constraint, TetConstraintValues, apply_constraint},
-    mesh::{Tetrahedral, Vertex, VertexId},
+    constraint::{Constraint, apply_constraint},
+    mesh::{Tetrahedral, Vertex, VertexId, tetrahedral::TetConstraintValues},
 };
 
 /// State for Extended Position Based Dynamics simulation.

@@ -1,8 +1,8 @@
 use criterion::{BatchSize, Criterion, black_box, criterion_group, criterion_main};
 use raylib::math::Vector3;
 use xpbdrs::{
-    constraint::{Constraint, TetConstraintValues, apply_constraint},
-    mesh::Tetrahedral,
+    constraint::{Constraint, apply_constraint},
+    mesh::{Tetrahedral, tetrahedral::TetConstraintValues},
     xpbd::{XpbdParams, XpbdState, step_basic, substep},
 };
 
