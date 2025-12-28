@@ -2,10 +2,7 @@
 
 use std::ops::{Index, IndexMut};
 
-use crate::{
-    mesh::{Edge, Tetrahedron, Vertex, VertexId},
-    xpbd::ConstraintSet,
-};
+use crate::mesh::{Edge, Tetrahedron, Vertex, VertexId};
 use raylib::math::Vector3;
 
 /// The value and gradient of an n-ary constraint.
@@ -32,7 +29,7 @@ pub trait Constraint<const ARITY: usize> {
         V: Index<VertexId, Output = Vertex>;
 }
 
-/// Apply constraint correction to all participants.
+/// Apply constraint correction to all participants in vertices `V` with time-scaled compliance `alpha`, given the reference value.
 /// Returns the computed Lagrange multiplier.
 pub fn apply_constraint<const N: usize, V>(
     vag: ValueGrad<N>,
@@ -207,7 +204,6 @@ impl ConstraintSet<Vec<Vertex>, TetConstraintValues> for TetConstraints {
             );
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
