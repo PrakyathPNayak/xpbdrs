@@ -3,6 +3,7 @@
 use std::ops::IndexMut;
 
 use bitvec::vec::BitVec;
+use rand::seq::SliceRandom;
 use raylib::math::Vector3;
 
 use crate::{
@@ -35,6 +36,10 @@ pub struct XpbdParams {
     pub l_threshold_volume: f32,
     /// A constant acceleration applied to all vertices (e.g., gravity).
     pub constant_field: Vector3,
+    /// Whether to shuffle constraint order for better convergence.
+    pub shuffle_constraints: bool,
+    /// Velocity damping factor (0.0 = no damping, 1.0 = full damping).
+    pub damping: f32,
 }
 
 impl Default for XpbdParams {
@@ -47,6 +52,8 @@ impl Default for XpbdParams {
             l_threshold_length: f32::INFINITY,
             l_threshold_volume: f32::INFINITY,
             constant_field: Vector3::new(0.0, -0.981, 0.0),
+            shuffle_constraints: true,
+            damping: 0.0,
         }
     }
 }
@@ -99,6 +106,41 @@ impl<V: IndexMut<VertexId, Output = Vertex>> ConstraintProcessor<'_, V> {
         self.constraint_index = n;
         self
     }
+
+    /// Process constraints with shuffled iteration order for better convergence.
+    /// Collects constraints into a vec and shuffles before processing.
+    pub fn process_shuffled<'a, I, C, const N: usize>(
+        mut self,
+        iter: I,
+        l_threshold: f32,
+        alpha: f32,
+    ) -> Self
+    where
+        I: Iterator<Item = (&'a C, f32)>,
+        C: Constraint<N> + 'a,
+    {
+        let base_index = self.constraint_index;
+        let mut constraints: Vec<(usize, (&'a C, f32))> = iter.enumerate().collect();
+        
+        // Shuffle the constraint order for better Gauss-Seidel convergence
+        let mut rng = rand::thread_rng();
+        constraints.shuffle(&mut rng);
+
+        let n = constraints
+            .into_iter()
+            .fold(base_index, |counter, (i, (constraint, ref_value))| {
+                let current_index = base_index + i;
+                if !self.inactive_constraints[current_index] {
+                    let result = constraint.value_and_grad(self.vertices);
+                    if apply_constraint(result, ref_value, alpha, self.vertices) > l_threshold {
+                        self.inactive_constraints.set(current_index, true);
+                    }
+                }
+                counter + 1
+            });
+        self.constraint_index = n;
+        self
+    }
 }
 
 // TODO: Implement more generic Xpbd function.
@@ -128,6 +170,8 @@ where
 pub trait ConstraintSet<V: IndexMut<VertexId, Output = Vertex>, I> {
     fn evaluate(&self, on: &V) -> I;
     fn solve(&self, processor: ConstraintProcessor<V>, params: &XpbdParams, reference: &I);
+    /// Solve constraints with shuffled iteration order for better convergence.
+    fn solve_shuffled(&self, processor: ConstraintProcessor<V>, params: &XpbdParams, reference: &I);
 }
 
 pub fn step<'v, I, F, C>(
@@ -154,7 +198,7 @@ where
 
             // unit mass for now
             vertex.position += params.constant_field * params.time_substep * params.time_substep
-                + vertex.position * params.time_substep;
+                + state.velocities[i] * params.time_substep;
 
             post_kinematic_correction(vertex);
         }
@@ -164,13 +208,18 @@ where
             vertices,
             constraint_index: 0,
         };
-        constraint_set.solve(processor, params, initial_value);
+        // Use shuffled or sequential constraint solving based on params
+        if params.shuffle_constraints {
+            constraint_set.solve_shuffled(processor, params, initial_value);
+        } else {
+            constraint_set.solve(processor, params, initial_value);
+        }
 
         // Update velocities based on position changes
         for (i, vertex) in vertices.into_iter().enumerate() {
             let new_velocity = (vertex.position - old_positions[i]) / params.time_substep;
-            // Update velocity in state
-            state.velocities[i] = new_velocity;
+            // Apply damping to velocity
+            state.velocities[i] = new_velocity * (1.0 - params.damping);
         }
     }
     state

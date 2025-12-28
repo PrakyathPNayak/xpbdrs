@@ -185,6 +185,27 @@ impl ConstraintSet<Vec<Vertex>, TetConstraintValues> for TetConstraints {
                 params.stiffness_volume / (params.time_substep * params.time_substep),
             );
     }
+
+    fn solve_shuffled(
+        &self,
+        processor: crate::xpbd::ConstraintProcessor<Vec<Vertex>>,
+        params: &crate::xpbd::XpbdParams,
+        reference: &TetConstraintValues,
+    ) {
+        processor
+            .process_shuffled(
+                self.edges.iter().zip(reference.lengths.iter().copied()),
+                params.l_threshold_length,
+                params.stiffness_length / (params.time_substep * params.time_substep),
+            )
+            .process_shuffled(
+                self.tetrahedra
+                    .iter()
+                    .zip(reference.volumes.iter().copied()),
+                params.l_threshold_volume,
+                params.stiffness_volume / (params.time_substep * params.time_substep),
+            );
+    }
 }
 
 #[cfg(test)]
