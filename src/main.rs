@@ -3,7 +3,7 @@ use raylib::prelude::*;
 use tracing::{debug, error, info, instrument};
 
 use xpbdrs::{
-    mesh::{self, Mesh},
+    mesh::{self, Spatial},
     xpbd::{self, ConstraintSet, XpbdState},
 };
 
@@ -58,7 +58,7 @@ fn setup_camera(mesh: Option<&mesh::Tetrahedral>) -> (Vector3, Vector3) {
     mesh.map_or_else(
         || (Vector3::new(7.0, 7.0, 7.0), Vector3::new(0.0, 0.0, 0.0)),
         |mesh| {
-            let (min, max) = mesh.bounding_box();
+            let (min, max) = mesh.vertices.bounding_box();
             debug!(
                 min_x = %min.x, min_y = %min.y, min_z = %min.z,
                 max_x = %max.x, max_y = %max.y, max_z = %max.z,
@@ -128,9 +128,18 @@ fn draw_ui(d: &mut RaylibDrawHandle) {
 
 #[instrument]
 fn load_mesh(mesh_path: &str) -> Option<mesh::Tetrahedral> {
-    mesh::Tetrahedral::load_mesh(mesh_path)
+    let load_result = if std::path::Path::new(mesh_path)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("bin"))
+    {
+        mesh::Tetrahedral::from_bincode(mesh_path)
+    } else {
+        mesh::Tetrahedral::from_files(mesh_path)
+    };
+
+    load_result
         .map(|mut m| {
-            m.translate(Vector3::new(0.0, 2.5, 0.0));
+            m.vertices.translate(Vector3::new(0.0, 2.5, 0.0));
             m
         })
         .ok()

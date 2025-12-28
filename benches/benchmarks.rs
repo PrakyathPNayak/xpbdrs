@@ -7,7 +7,7 @@ use xpbdrs::{
 };
 
 fn load_test_mesh() -> Tetrahedral {
-    Tetrahedral::load_mesh("mesh/utah_teapot.bin")
+    Tetrahedral::from_bincode("mesh/utah_teapot.bin")
         .expect("Required test mesh 'mesh/utah_teapot.bin' not found. Cannot run benchmarks without realistic mesh data.")
 }
 
