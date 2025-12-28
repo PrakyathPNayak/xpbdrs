@@ -96,12 +96,65 @@ fn setup_camera(mesh: Option<&mesh::Tetrahedral>) -> (Vector3, Vector3) {
     )
 }
 
-fn handle_input(rl: &RaylibHandle, show_wireframe: &mut bool, show_faces: &mut bool) {
-    if rl.is_key_pressed(KeyboardKey::KEY_W) {
+fn handle_input(rl: &RaylibHandle, show_wireframe: &mut bool, show_faces: &mut bool, params: &mut SimParams) {
+    if rl.is_key_pressed(KeyboardKey::KEY_R) {
         *show_wireframe = !*show_wireframe;
     }
     if rl.is_key_pressed(KeyboardKey::KEY_F) {
         *show_faces = !*show_faces;
+    }
+    // Pause/unpause simulation
+    if rl.is_key_pressed(KeyboardKey::KEY_SPACE) {
+        params.paused = !params.paused;
+    }
+    // Toggle shuffle mode
+    if rl.is_key_pressed(KeyboardKey::KEY_T) {
+        params.shuffle_constraints = !params.shuffle_constraints;
+    }
+    
+    // Parameter adjustment step sizes
+    let stiffness_step = 0.0000001;
+    let damping_step = 0.005;
+    let gravity_step = 0.1;
+    
+    // Edge stiffness: 1/2 to increase/decrease
+    if rl.is_key_pressed(KeyboardKey::KEY_ONE) {
+        params.stiffness_length = (params.stiffness_length + stiffness_step).min(0.001);
+    }
+    if rl.is_key_pressed(KeyboardKey::KEY_TWO) {
+        params.stiffness_length = (params.stiffness_length - stiffness_step).max(0.0);
+    }
+    
+    // Volume stiffness: 3/4 to increase/decrease
+    if rl.is_key_pressed(KeyboardKey::KEY_THREE) {
+        params.stiffness_volume = (params.stiffness_volume + stiffness_step).min(0.001);
+    }
+    if rl.is_key_pressed(KeyboardKey::KEY_FOUR) {
+        params.stiffness_volume = (params.stiffness_volume - stiffness_step).max(0.0);
+    }
+    
+    // Damping: 5/6 to increase/decrease
+    if rl.is_key_pressed(KeyboardKey::KEY_FIVE) {
+        params.damping = (params.damping + damping_step).min(1.0);
+    }
+    if rl.is_key_pressed(KeyboardKey::KEY_SIX) {
+        params.damping = (params.damping - damping_step).max(0.0);
+    }
+    
+    // Gravity: 9/0 to increase/decrease magnitude
+    if rl.is_key_pressed(KeyboardKey::KEY_NINE) {
+        params.gravity -= gravity_step; // More negative = stronger gravity
+    }
+    if rl.is_key_pressed(KeyboardKey::KEY_ZERO) {
+        params.gravity += gravity_step;
+    }
+    
+    // Substeps: UP/DOWN to adjust
+    if rl.is_key_pressed(KeyboardKey::KEY_UP) {
+        params.n_substeps = (params.n_substeps + 5).min(100);
+    }
+    if rl.is_key_pressed(KeyboardKey::KEY_DOWN) {
+        params.n_substeps = params.n_substeps.saturating_sub(5).max(1);
     }
 }
 
@@ -120,10 +173,70 @@ fn draw_mesh(
     }
 }
 
-fn draw_ui(d: &mut RaylibDrawHandle) {
+fn draw_ui(d: &mut RaylibDrawHandle, params: &SimParams, mesh: Option<&mesh::Tetrahedral>) {
+    let screen_width = d.get_screen_width();
+    
+    // Left panel: Controls help
     d.draw_fps(10, 10);
-    d.draw_text("W: Toggle Wireframe", 10, 40, 20, Color::WHITE);
-    d.draw_text("F: Toggle Faces", 10, 60, 20, Color::WHITE);
+    d.draw_text("=== CONTROLS ===", 10, 40, 16, Color::DARKGRAY);
+    d.draw_text("R: Toggle Wireframe", 10, 60, 14, Color::MIDNIGHTBLUE);
+    d.draw_text("F: Toggle Faces", 10, 78, 14, Color::MIDNIGHTBLUE);
+    d.draw_text("SPACE: Pause/Resume", 10, 96, 14, Color::MIDNIGHTBLUE);
+    d.draw_text("T: Toggle Shuffle", 10, 114, 14, Color::MIDNIGHTBLUE);
+    
+    d.draw_text("=== ADJUST ===", 10, 140, 16, Color::DARKGRAY);
+    d.draw_text("1/2: Edge Stiffness +/-", 10, 160, 14, Color::MIDNIGHTBLUE);
+    d.draw_text("3/4: Volume Stiffness +/-", 10, 178, 14, Color::MIDNIGHTBLUE);
+    d.draw_text("5/6: Damping +/-", 10, 196, 14, Color::MIDNIGHTBLUE);
+    d.draw_text("9/0: Gravity +/-", 10, 214, 14, Color::MIDNIGHTBLUE);
+    d.draw_text("UP/DOWN: Substeps", 10, 232, 14, Color::MIDNIGHTBLUE);
+    
+    // Right panel: Current parameter values
+    let panel_x = screen_width - 220;
+    d.draw_rectangle(panel_x - 10, 30, 220, 220, Color::WHITE.alpha(0.85));
+    d.draw_rectangle_lines(panel_x - 10, 30, 220, 220, Color::DARKGRAY);
+    
+    d.draw_text("=== PARAMETERS ===", panel_x, 40, 16, Color::DARKGRAY);
+    
+    // Status indicator
+    let status_text = if params.paused { "PAUSED" } else { "RUNNING" };
+    let status_color = if params.paused { Color::RED } else { Color::GREEN };
+    d.draw_text(status_text, panel_x, 60, 18, status_color);
+    
+    // Parameter values
+    d.draw_text(
+        &format!("Edge Stiff: {:.2e}", params.stiffness_length),
+        panel_x, 85, 14, Color::DARKBLUE
+    );
+    d.draw_text(
+        &format!("Vol Stiff:  {:.2e}", params.stiffness_volume),
+        panel_x, 103, 14, Color::DARKBLUE
+    );
+    d.draw_text(
+        &format!("Damping:    {:.3}", params.damping),
+        panel_x, 121, 14, Color::DARKBLUE
+    );
+    d.draw_text(
+        &format!("Gravity:    {:.2}", params.gravity),
+        panel_x, 139, 14, Color::DARKBLUE
+    );
+    d.draw_text(
+        &format!("Substeps:   {}", params.n_substeps),
+        panel_x, 157, 14, Color::DARKBLUE
+    );
+    
+    let shuffle_text = if params.shuffle_constraints { "ON" } else { "OFF" };
+    let shuffle_color = if params.shuffle_constraints { Color::GREEN } else { Color::GRAY };
+    d.draw_text(&format!("Shuffle:    {}", shuffle_text), panel_x, 175, 14, shuffle_color);
+    
+    // Mesh info if available
+    if let Some(m) = mesh {
+        d.draw_text("--- Mesh ---", panel_x, 200, 14, Color::DARKGRAY);
+        d.draw_text(
+            &format!("Verts: {} Edges: {}", m.vertices.len(), m.constraints.edges.len()),
+            panel_x, 218, 12, Color::GRAY
+        );
+    }
 }
 
 #[instrument]
@@ -147,18 +260,60 @@ fn load_mesh(mesh_path: &str) -> Option<mesh::Tetrahedral> {
 
 const TARGET_FPS: u16 = 60;
 const TIME_STEP: f32 = 1.0 / TARGET_FPS as f32;
-const N_SUBSTEPS: usize = 10;
-const EDGE_COMPLIANCE: f32 = 0.00;
-const VOLUME_COMPLIANCE: f32 = 0.00;
+const N_SUBSTEPS: usize = 30;
+const EDGE_STIFFNESS: f32 = 0.0000008;
+const VOLUME_STIFFNESS: f32 = 0.00;
+
+/// Mutable simulation state for live parameter tuning.
+struct SimParams {
+    stiffness_length: f32,
+    stiffness_volume: f32,
+    damping: f32,
+    gravity: f32,
+    n_substeps: usize,
+    shuffle_constraints: bool,
+    paused: bool,
+}
+
+impl Default for SimParams {
+    fn default() -> Self {
+        Self {
+            stiffness_length: EDGE_STIFFNESS,
+            stiffness_volume: VOLUME_STIFFNESS,
+            damping: 0.0,
+            gravity: -0.981,
+            n_substeps: N_SUBSTEPS,
+            shuffle_constraints: true,
+            paused: false,
+        }
+    }
+}
+
+impl SimParams {
+    /// Convert to XpbdParams for the simulation.
+    fn to_xpbd_params(&self) -> xpbd::XpbdParams {
+        xpbd::XpbdParams {
+            n_substeps: self.n_substeps,
+            time_substep: TIME_STEP / (self.n_substeps as f32),
+            stiffness_length: self.stiffness_length,
+            stiffness_volume: self.stiffness_volume,
+            damping: self.damping,
+            shuffle_constraints: self.shuffle_constraints,
+            constant_field: Vector3::new(0.0, self.gravity, 0.0),
+            ..Default::default()
+        }
+    }
+}
 
 #[instrument]
 fn run_simulation(mesh_path: Option<&str>) {
     let mut mesh = mesh_path.and_then(load_mesh);
     let mut show_wireframe = true;
     let mut show_faces = false;
+    let mut sim_params = SimParams::default();
 
     let (mut rl, thread) = raylib::init()
-        .size(800, 600)
+        .size(1000, 1000)
         .title("XPBD Cloth Simulation")
         .build();
 
@@ -167,13 +322,6 @@ fn run_simulation(mesh_path: Option<&str>) {
     rl.set_target_fps(TARGET_FPS.into());
 
     let initial_values = mesh.as_ref().map(|m| m.constraints.evaluate(&m.vertices));
-    let xpbd_params = xpbd::XpbdParams {
-        n_substeps: N_SUBSTEPS,
-        time_substep: TIME_STEP / (N_SUBSTEPS as f32),
-        length_compliance: EDGE_COMPLIANCE,
-        volume_compliance: VOLUME_COMPLIANCE,
-        ..Default::default()
-    };
     let mut state = mesh.as_ref().map(|m| {
         XpbdState::new(
             m.vertices.len(),
@@ -182,18 +330,22 @@ fn run_simulation(mesh_path: Option<&str>) {
     });
 
     while !rl.window_should_close() {
-        handle_input(&rl, &mut show_wireframe, &mut show_faces);
+        handle_input(&rl, &mut show_wireframe, &mut show_faces, &mut sim_params);
         rl.update_camera(&mut camera, CameraMode::CAMERA_THIRD_PERSON);
 
-        if let Some(mesh) = &mut mesh {
-            let current_state = state.take().unwrap();
-            state = Some(xpbd::step_basic(
-                &xpbd_params,
-                current_state,
-                mesh,
-                initial_values.as_ref().unwrap(),
-                |v| v.position.y = v.position.y.max(0.0), // ground at y=0
-            ));
+        // Only step simulation if not paused
+        if !sim_params.paused {
+            if let Some(mesh) = &mut mesh {
+                let current_state = state.take().unwrap();
+                let xpbd_params = sim_params.to_xpbd_params();
+                state = Some(xpbd::step_basic(
+                    &xpbd_params,
+                    current_state,
+                    mesh,
+                    initial_values.as_ref().unwrap(),
+                    |v| v.position.y = v.position.y.max(0.0), // ground at y=0
+                ));
+            }
         }
 
         let mut d = rl.begin_drawing(&thread);
@@ -222,7 +374,7 @@ fn run_simulation(mesh_path: Option<&str>) {
             }
         }
 
-        draw_ui(&mut d);
+        draw_ui(&mut d, &sim_params, mesh.as_ref());
     }
 }
 

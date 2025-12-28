@@ -3,6 +3,7 @@
 use std::ops::IndexMut;
 
 use bitvec::vec::BitVec;
+use rand::seq::SliceRandom;
 use raylib::math::Vector3;
 
 use crate::{
@@ -51,6 +52,12 @@ pub struct XpbdParams {
     pub l_threshold_length: f32,
     /// Volume constraint force-threshold for deactivation.
     pub l_threshold_volume: f32,
+    /// A constant acceleration applied to all vertices (e.g., gravity).
+    pub constant_field: Vector3,
+    /// Whether to shuffle constraint order for better convergence.
+    pub shuffle_constraints: bool,
+    /// Velocity damping factor (0.0 = no damping, 1.0 = full damping).
+    pub damping: f32,
 }
 
 impl Default for XpbdParams {
@@ -62,7 +69,9 @@ impl Default for XpbdParams {
             time_substep: 0.016 / 10.0,
             l_threshold_length: f32::INFINITY,
             l_threshold_volume: f32::INFINITY,
-            // constant_field: Vector3::new(0.0, -0.981, 0.0),
+            constant_field: Vector3::new(0.0, -0.981, 0.0),
+            shuffle_constraints: true,
+            damping: 0.0,
         }
     }
 }
@@ -118,6 +127,41 @@ impl<V: IndexMut<VertexId, Output = Vertex>> ConstraintProcessor<'_, V> {
         self.constraint_index = n;
         self
     }
+
+    /// Process constraints with shuffled iteration order for better convergence.
+    /// Collects constraints into a vec and shuffles before processing.
+    pub fn process_shuffled<'a, I, C, const N: usize>(
+        mut self,
+        iter: I,
+        l_threshold: f32,
+        alpha: f32,
+    ) -> Self
+    where
+        I: Iterator<Item = (&'a C, f32)>,
+        C: Constraint<N> + 'a,
+    {
+        let base_index = self.constraint_index;
+        let mut constraints: Vec<(usize, (&'a C, f32))> = iter.enumerate().collect();
+        
+        // Shuffle the constraint order for better Gauss-Seidel convergence
+        let mut rng = rand::thread_rng();
+        constraints.shuffle(&mut rng);
+
+        let n = constraints
+            .into_iter()
+            .fold(base_index, |counter, (i, (constraint, ref_value))| {
+                let current_index = base_index + i;
+                if !self.inactive_constraints[current_index] {
+                    let result = constraint.value_and_grad(self.vertices);
+                    if apply_constraint(result, ref_value, alpha, self.vertices) > l_threshold {
+                        self.inactive_constraints.set(current_index, true);
+                    }
+                }
+                counter + 1
+            });
+        self.constraint_index = n;
+        self
+    }
 }
 
 /// Basic XPBD step function for tetrahedral meshes.
@@ -153,6 +197,8 @@ pub trait ConstraintSet<V: IndexMut<VertexId, Output = Vertex>, I> {
     fn evaluate(&self, on: &V) -> I;
     /// Solve the constraint set using the given processor.
     fn solve(&self, processor: ConstraintProcessor<V>, params: &XpbdParams, reference: &I);
+    /// Solve constraints with shuffled iteration order for better convergence.
+    fn solve_shuffled(&self, processor: ConstraintProcessor<V>, params: &XpbdParams, reference: &I);
 }
 
 /// Perform a single substep of XPBD simulation.
@@ -186,17 +232,23 @@ pub fn substep<V, I, F, C, A>(
         post_kinematic_correction(vertex);
     }
 
-    let processor = ConstraintProcessor {
-        inactive_constraints: &mut state.inactive_constraints,
-        vertices,
-        constraint_index: 0,
-    };
-    constraint_set.solve(processor, params, initial_value);
+        let processor = ConstraintProcessor {
+            inactive_constraints: &mut state.inactive_constraints,
+            vertices,
+            constraint_index: 0,
+        };
+        // Use shuffled or sequential constraint solving based on params
+        if params.shuffle_constraints {
+            constraint_set.solve_shuffled(processor, params, initial_value);
+        } else {
+            constraint_set.solve(processor, params, initial_value);
+        }
 
-    // Update velocities based on position changes
-    for (i, vertex) in vertices.into_iter().enumerate() {
-        let new_velocity = (vertex.position - old_positions[i]) / params.time_substep;
-        // Update velocity in state
-        state.velocities[i] = new_velocity;
+        // Update velocities based on position changes
+        for (i, vertex) in vertices.into_iter().enumerate() {
+            let new_velocity = (vertex.position - old_positions[i]) / params.time_substep;
+            // Apply damping to velocity
+            state.velocities[i] = new_velocity * (1.0 - params.damping);
+        }
     }
 }

@@ -143,6 +143,67 @@ impl Constraint<4> for Tetrahedron {
     }
 }
 
+pub struct TetConstraintValues {
+    pub lengths: Vec<f32>,
+    pub volumes: Vec<f32>,
+}
+
+/// Struct to contain constraint data for tetrahedral meshes.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct TetConstraints {
+    pub edges: Vec<Edge>,
+    pub tetrahedra: Vec<Tetrahedron>,
+}
+
+impl ConstraintSet<Vec<Vertex>, TetConstraintValues> for TetConstraints {
+    fn evaluate(&self, on: &Vec<Vertex>) -> TetConstraintValues {
+        let lengths = self.edges.iter().map(|e| e.value(on)).collect();
+        let volumes = self.tetrahedra.iter().map(|t| t.value(on)).collect();
+        TetConstraintValues { lengths, volumes }
+    }
+
+    fn solve(
+        &self,
+        processor: crate::xpbd::ConstraintProcessor<Vec<Vertex>>,
+        params: &crate::xpbd::XpbdParams,
+        reference: &TetConstraintValues,
+    ) {
+        processor
+            .process(
+                self.edges.iter().zip(reference.lengths.iter().copied()),
+                params.l_threshold_length,
+                params.stiffness_length / (params.time_substep * params.time_substep),
+            )
+            .process(
+                self.tetrahedra
+                    .iter()
+                    .zip(reference.volumes.iter().copied()),
+                params.l_threshold_volume,
+                params.stiffness_volume / (params.time_substep * params.time_substep),
+            );
+    }
+
+    fn solve_shuffled(
+        &self,
+        processor: crate::xpbd::ConstraintProcessor<Vec<Vertex>>,
+        params: &crate::xpbd::XpbdParams,
+        reference: &TetConstraintValues,
+    ) {
+        processor
+            .process_shuffled(
+                self.edges.iter().zip(reference.lengths.iter().copied()),
+                params.l_threshold_length,
+                params.stiffness_length / (params.time_substep * params.time_substep),
+            )
+            .process_shuffled(
+                self.tetrahedra
+                    .iter()
+                    .zip(reference.volumes.iter().copied()),
+                params.l_threshold_volume,
+                params.stiffness_volume / (params.time_substep * params.time_substep),
+            );
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
