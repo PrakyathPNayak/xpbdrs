@@ -1,6 +1,6 @@
 [package]
 name = "xpbdrs"
-description = "An implementation of Extended Position Based Dynamics for cloth simulation in Rust."
+description = "Extended Position Based Dynamics library for tetrahedral and triangulated mesh simulation."
 version = "0.1.0"
 edition = "2024"
 
